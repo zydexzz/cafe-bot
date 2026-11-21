@@ -28,12 +28,12 @@ MENU_RE = r"(?i)^\s*(меню|мәзір)\s*$"
 BOOK_RE = rf"^\s*{BTN_BOOK}\s*$"
 
 START_TEXT = (
-    "Здравствуйте! Сәлеметсіз бе! ☕\n"
+    "Привет! Сәлем! ☕\n"
     "Я помощник кофейни qaz.su в Караганде: подскажу по меню и ценам, расскажу об акциях "
-    "и забронирую столик. Пишите по-русски или по-казахски.\n\n"
+    "и забронирую столик. Пиши по-русски или по-казахски.\n\n"
     "Кнопки внизу: «Меню» — полное меню с ценами, «Забронировать столик» — бронь за минуту."
 )
-RESET_TEXT = "История диалога очищена, начнём заново. Чем могу помочь?\nДиалог тарихы тазартылды."
+RESET_TEXT = "История диалога очищена, начнём заново. Чем помочь?\nДиалог тарихы тазартылды."
 
 
 def setup_logging() -> None:
@@ -145,7 +145,13 @@ async def on_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def on_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ask_ai(update, context, BTN_BOOK, set_lang=False)
+    """Открывает форму брони. Модель здесь не нужна: первый вопрос задаёт код."""
+    a = assistant(context)
+    chat_id = update.effective_chat.id
+    async with a.session(chat_id).lock:
+        reply = a.start_booking(chat_id, BTN_BOOK)
+    await drop_old_buttons(context, chat_id)
+    await send_reply(update, context, reply)
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -154,7 +160,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def on_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "Пока я понимаю только текст. Напишите, пожалуйста, сообщением 🙂\n"
+        "Пока я понимаю только текст. Напиши, пожалуйста, сообщением 🙂\n"
         "Әзірге тек мәтінді түсінемін.",
         reply_markup=MAIN_KEYBOARD,
     )
@@ -165,9 +171,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     action, _, raw_id = (q.data or "").partition(":")
     a = assistant(context)
     chat_id = update.effective_chat.id
-    draft_id = int(raw_id) if raw_id.isdigit() else -1
+    confirm_id = int(raw_id) if raw_id.isdigit() else -1
 
-    if not a.is_current_draft(chat_id, draft_id):
+    if not a.is_current_confirm(chat_id, confirm_id):
         await q.answer("Эта бронь уже неактуальна · Бұл брондау өзекті емес")
         with contextlib.suppress(Exception):
             await q.edit_message_reply_markup(reply_markup=None)
@@ -178,16 +184,14 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await q.edit_message_reply_markup(reply_markup=None)
     context.chat_data.pop("draft_msg_id", None)
 
-    if action == "confirm":
-        async with a.session(chat_id).lock:
-            user = update.effective_user
-            reply = a.confirm(chat_id, draft_id, username=(user.username or "") if user else "")
-        if reply:
-            await send_reply(update, context, reply)
-    elif action == "edit":
-        text = "Брондау деректерін өзгерткім келеді" if a.session(chat_id).lang == "kz" \
-            else "Хочу изменить данные брони"
-        await ask_ai(update, context, text, set_lang=False)
+    user = update.effective_user
+    async with a.session(chat_id).lock:
+        if action == "confirm":
+            reply = a.confirm(chat_id, confirm_id, username=(user.username or "") if user else "")
+        else:
+            reply = a.edit(chat_id, confirm_id)
+    if reply:
+        await send_reply(update, context, reply)
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
