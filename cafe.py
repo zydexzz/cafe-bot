@@ -503,6 +503,28 @@ class Reply:
     saved: Booking | None = None
 
 
+CHAT_MAX_TOKENS = 2000  # обычный разговор: размышление + ответ, чтобы рассуждение не съело ответ
+
+THINK_RE = re.compile(r"<размышление>(.*?)(?:</размышление>|$)", re.S | re.I)
+ANSWER_RE = re.compile(r"<ответ>(.*?)(?:</ответ>|$)", re.S | re.I)
+
+
+def split_reasoning(raw: str) -> tuple[str, str]:
+    """Ответ модели → (размышление, текст для гостя).
+
+    Гостю идёт только <ответ>…</ответ>. Если тегов ответа нет — весь текст без <размышление>…;
+    незакрытое размышление вырезается до конца текста.
+    """
+    thinking = "\n".join(m.strip() for m in THINK_RE.findall(raw)).strip()
+    m = ANSWER_RE.search(raw)
+    if m:
+        answer = m.group(1)
+    else:
+        answer = THINK_RE.sub("", raw)
+    answer = re.sub(r"</?(?:ответ|размышление)>", "", answer, flags=re.I)
+    return thinking, answer.strip()
+
+
 def clean_text(text: str) -> str:
     text = text.replace("**", "").replace("__", "")
     text = re.sub(r"^#{1,6}\s*", "", text, flags=re.M)
@@ -569,11 +591,18 @@ class CafeAssistant:
         system = self.prompt_template.replace("{{NOW}}", now_block(now))
         messages = [{"role": "system", "content": system}, *s.history, {"role": "user", "content": user_text}]
         try:
-            raw, _model = await self.llm.complete(messages)
+            raw, _model = await self.llm.complete(messages, max_tokens=CHAT_MAX_TOKENS)
         except LLMUnavailable as e:
             log.error("нет ответа от моделей: %s", e)
             return Reply(t(TEXTS["unavailable"], s.lang))
-        return self._remember(s, user_text, Reply(clean_text(raw)))
+        thinking, answer = split_reasoning(raw)
+        log.info("THINK %s", thinking or "(модель не написала <размышление>)")
+        answer = clean_text(answer)
+        if not answer:  # модель только рассуждала и не дошла до ответа
+            log.warning("в ответе модели нет текста для гостя")
+            return Reply(t(TEXTS["unavailable"], s.lang))
+        # в историю диалога — только ответ, без размышления
+        return self._remember(s, user_text, Reply(answer))
 
     # --- форма брони ---
 
