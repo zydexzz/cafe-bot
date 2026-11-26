@@ -59,6 +59,8 @@ DEFAULT_MODELS = [
     "google/gemma-4-31b-it:free",
 ]
 RATE_LIMIT_COOLDOWN = 60  # секунд не трогаем модель после ответа 429
+# С рассуждением high ответ идёт до минуты и дольше (прогон compare.py 26.11.2026: до 65 с)
+HIGH_EFFORT_TIMEOUT = httpx.Timeout(150, connect=10)
 
 WEEKDAYS_RU = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 WEEKDAYS_KZ = ["дүйсенбі", "сейсенбі", "сәрсенбі", "бейсенбі", "жұма", "сенбі", "жексенбі"]
@@ -151,23 +153,28 @@ class LLM:
         await self.client.aclose()
 
     async def complete(self, messages: list[dict], temperature: float = 0.3, max_tokens: int = 700,
-                       json_mode: bool = False) -> tuple[str, str]:
-        """Возвращает (текст, модель). Модели перебираются по порядку при 429, ошибках и пустом ответе."""
+                       json_mode: bool = False, effort: str = "none") -> tuple[str, str]:
+        """Возвращает (текст, модель). Модели перебираются по порядку при 429, ошибках и пустом ответе.
+
+        effort — встроенное рассуждение модели: "none" (выключено) или "high". Текст рассуждения
+        не запрашивается (exclude), но его токены входят в max_tokens, а ответ идёт дольше.
+        """
         now = time.monotonic()
         ready = [m for m in self.models if self.cooldown.get(m, 0) <= now]
+        timeout = HIGH_EFFORT_TIMEOUT if effort != "none" else httpx.USE_CLIENT_DEFAULT
         for model in ready or self.models:
             body = {
                 "model": model,
                 "messages": messages,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
-                "reasoning": {"enabled": False, "exclude": True},
+                "reasoning": {"effort": effort, "exclude": True},
             }
             if json_mode:  # просим у провайдера чистый JSON; где не поддерживается, OpenRouter это игнорирует
                 body["response_format"] = {"type": "json_object"}
             started = time.monotonic()
             try:
-                r = await self.client.post("/chat/completions", json=body)
+                r = await self.client.post("/chat/completions", json=body, timeout=timeout)
             except httpx.HTTPError as e:
                 log.warning("%s: %s", model, type(e).__name__)
                 continue
@@ -503,7 +510,70 @@ class Reply:
     saved: Booking | None = None
 
 
-CHAT_MAX_TOKENS = 2000  # обычный разговор: размышление + ответ, чтобы рассуждение не съело ответ
+CHAT_MAX_TOKENS = 700         # обычный разговор без рассуждения
+CHAT_MAX_TOKENS_HIGH = 6000   # с рассуждением: встроенное рассуждение + <размышление> + ответ
+EXTRACT_MAX_TOKENS = 300      # разбор заявки в JSON без рассуждения
+EXTRACT_MAX_TOKENS_HIGH = 4000
+
+# ---------- режим рассуждения: решает код, не модель ----------
+
+# Расчёт: «сколько выйдет», «итого», «посчитай»…
+CALC_WORDS_RE = re.compile(
+    r"сколько\s+(?:это\s+)?(?:выйдет|будет|получится|с\s+меня|с\s+нас|всего|за\s+всё|за\s+все)"
+    r"|\bитог|посчита|подсчита|в\s+сумме|общ(?:ая|ую)\s+сумм|на\s+какую\s+сумму"
+    r"|қанша\s+(?:болады|шығады)|барлығы|есепте",
+    re.I,
+)
+_COUNT = (r"\d+|один|одн[ауо]|два|две|три|четыре|пять|шесть|семь|восемь|девять|десять"
+          r"|бір|екі|үш|төрт|бес|алты|жеті|сегіз|тоғыз")
+_NOT_ITEM = r"человек|чел\b|гост|адам|қонақ|мин|час|сағ|дн|день|дня|недел|раз\b|₸|тг|тенге|теңге|%"
+# Позиция с количеством: «2 латте», «два капучино», «3 × медовик». Не люди, не время, не деньги.
+QTY_ITEM_RE = re.compile(rf"(?<![\w:.])(?:{_COUNT})\s*(?:[x×х*]|шт\.?)?\s+(?!(?:{_NOT_ITEM}))[«\"]?[a-zа-яёәғқңөұүһі]",
+                         re.I)
+ITEM_SEPARATOR_RE = re.compile(r",|\+|\s(?:и|плюс|ещё|еще|және|мен)\s", re.I)
+
+
+@dataclass(frozen=True)
+class ReasoningMode:
+    effort: str            # "none" или "high" — параметр reasoning.effort для OpenRouter
+    reason: str            # почему выбран режим — пишется в лог
+
+    @property
+    def thinking(self) -> bool:
+        """Включать ли шаг <размышление> в system prompt."""
+        return self.effort != "none"
+
+
+def is_calculation(text: str) -> bool:
+    """Расчёт: слова про сумму или несколько позиций, хотя бы одна с количеством."""
+    if CALC_WORDS_RE.search(text):
+        return True
+    return bool(QTY_ITEM_RE.search(text)) and bool(ITEM_SEPARATOR_RE.search(text))
+
+
+def choose_reasoning(text: str, booking: bool) -> ReasoningMode:
+    """booking — сообщение идёт в форму брони (форма уже открыта или включилась на этом сообщении)."""
+    if booking:
+        return ReasoningMode("high", "бронь")
+    if is_calculation(text):
+        return ReasoningMode("high", "расчёт")
+    return ReasoningMode("none", "простой вопрос")
+
+
+# Шаг рассуждения в system_prompt.md: раздел целиком и фраза про него в блоке <примеры>
+REASONING_SECTION_RE = re.compile(r"## Рассуждение перед ответом\n.*?(?=\n## )", re.S)
+REASONING_NOTE = " В примерах показан только текст из <ответ>, а размышление пиши всегда."
+
+
+def strip_reasoning_step(prompt: str) -> str:
+    """System prompt без шага <размышление>/<ответ> — для режима без рассуждения."""
+    if not REASONING_SECTION_RE.search(prompt):
+        raise RuntimeError("В system_prompt.md нет раздела «## Рассуждение перед ответом»")
+    prompt = REASONING_SECTION_RE.sub("", prompt).replace(REASONING_NOTE, "")
+    if "<ответ>" in prompt or "<размышление>" in prompt:
+        raise RuntimeError("В system prompt без рассуждения остались теги <размышление>/<ответ>")
+    return prompt
+
 
 THINK_RE = re.compile(r"<размышление>(.*?)(?:</размышление>|$)", re.S | re.I)
 ANSWER_RE = re.compile(r"<ответ>(.*?)(?:</ответ>|$)", re.S | re.I)
@@ -549,7 +619,8 @@ class CafeAssistant:
     def __init__(self, llm: LLM, bookings_path: Path = BOOKINGS_PATH):
         self.llm = llm
         self.bookings_path = bookings_path
-        self.prompt_template = load_prompt_template()
+        self.prompt_template = load_prompt_template()                       # с шагом <размышление>
+        self.prompt_template_plain = strip_reasoning_step(self.prompt_template)  # без него
         self.extract_template = EXTRACT_PROMPT_PATH.read_text(encoding="utf-8")
         self.sessions: dict[int, Session] = {}
 
@@ -574,9 +645,11 @@ class CafeAssistant:
         now = now or datetime.now(TZ)
         if s.form is None and BOOKING_TRIGGER_RE.search(user_text):
             s.form = BookingForm()
+        mode = choose_reasoning(user_text, booking=s.form is not None)
+        log.info("режим рассуждения: %s (%s)", mode.effort, mode.reason)
         if s.form is not None:
-            return await self._form_step(s, chat_id, user_text, username, now)
-        return await self._free_chat(s, user_text, now)
+            return await self._form_step(s, chat_id, user_text, username, now, mode)
+        return await self._free_chat(s, user_text, now, mode)
 
     def start_booking(self, chat_id: int, button_text: str) -> Reply:
         """Кнопка «Забронировать столик»: открывает форму без запроса к модели."""
@@ -587,16 +660,19 @@ class CafeAssistant:
 
     # --- обычный разговор ---
 
-    async def _free_chat(self, s: Session, user_text: str, now: datetime) -> Reply:
-        system = self.prompt_template.replace("{{NOW}}", now_block(now))
+    async def _free_chat(self, s: Session, user_text: str, now: datetime, mode: ReasoningMode) -> Reply:
+        template = self.prompt_template if mode.thinking else self.prompt_template_plain
+        system = template.replace("{{NOW}}", now_block(now))
         messages = [{"role": "system", "content": system}, *s.history, {"role": "user", "content": user_text}]
+        max_tokens = CHAT_MAX_TOKENS_HIGH if mode.thinking else CHAT_MAX_TOKENS
         try:
-            raw, _model = await self.llm.complete(messages, max_tokens=CHAT_MAX_TOKENS)
+            raw, _model = await self.llm.complete(messages, max_tokens=max_tokens, effort=mode.effort)
         except LLMUnavailable as e:
             log.error("нет ответа от моделей: %s", e)
             return Reply(t(TEXTS["unavailable"], s.lang))
         thinking, answer = split_reasoning(raw)
-        log.info("THINK %s", thinking or "(модель не написала <размышление>)")
+        if mode.thinking:
+            log.info("THINK %s", thinking or "(модель не написала <размышление>)")
         answer = clean_text(answer)
         if not answer:  # модель только рассуждала и не дошла до ответа
             log.warning("в ответе модели нет текста для гостя")
@@ -606,14 +682,16 @@ class CafeAssistant:
 
     # --- форма брони ---
 
-    async def _extract(self, s: Session, user_text: str, now: datetime) -> dict | None:
+    async def _extract(self, s: Session, user_text: str, now: datetime, mode: ReasoningMode) -> dict | None:
         """Сообщение гостя → JSON с данными брони. Один повтор, если JSON не разобрался."""
         messages = [
             {"role": "system", "content": extract_prompt(self.extract_template, now, s.form.asking)},
             {"role": "user", "content": user_text},
         ]
         for attempt in (1, 2):
-            raw, model = await self.llm.complete(messages, temperature=0, max_tokens=300, json_mode=True)
+            max_tokens = EXTRACT_MAX_TOKENS_HIGH if mode.thinking else EXTRACT_MAX_TOKENS
+            raw, model = await self.llm.complete(messages, temperature=0, max_tokens=max_tokens,
+                                                 json_mode=True, effort=mode.effort)
             try:
                 return parse_extraction(raw)
             except ValueError as e:
@@ -625,7 +703,7 @@ class CafeAssistant:
         return t(QUESTIONS[f], s.lang)
 
     async def _form_step(self, s: Session, chat_id: int, user_text: str, username: str,
-                         now: datetime) -> Reply:
+                         now: datetime, mode: ReasoningMode) -> Reply:
         form = s.form
         if CANCEL_RE.search(user_text):
             s.form = None
@@ -641,7 +719,7 @@ class CafeAssistant:
             # иначе это правка вроде «нет, на 20:00» — разбираем как обычное сообщение
 
         try:
-            ext = await self._extract(s, user_text, now)
+            ext = await self._extract(s, user_text, now, mode)
         except LLMUnavailable as e:
             log.error("нет ответа от моделей: %s", e)
             return Reply(t(TEXTS["unavailable"], s.lang))
@@ -652,8 +730,8 @@ class CafeAssistant:
         if ext["intent"] == "other" and not found:
             if not any(form.data.values()) and form.asking is None:
                 s.form = None  # слово «бронь» было, но заявки нет — обычный разговор
-                return await self._free_chat(s, user_text, now)
-            reply = await self._free_chat(s, user_text, now)  # вопрос посреди брони
+                return await self._free_chat(s, user_text, now, mode)
+            reply = await self._free_chat(s, user_text, now, mode)  # вопрос посреди брони
             if s.form is form and form.asking:
                 reply.text += "\n\n" + t(QUESTIONS[form.asking], s.lang)
             return reply
