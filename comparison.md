@@ -94,3 +94,146 @@ I'll respond in Russian (user wrote in Russian). Keep it short, 1-2 sentences. N
 </details>
 
 > В меню нет безглютенового торта — [уточнить] у бариста или по телефону +7 7212 50-60-70, вдруг появятся новые десерты. А из текущих можно попробовать брауни за 1 100 ₸ или чак-чак за 800 ₸ — без торта, но с удовольствием 😉
+
+<!-- compare.py: start -->
+## Reasoning effort: none / high на трудных вопросах
+
+- Модель: `nvidia/nemotron-3-ultra-550b-a55b:free`, одна и та же во всех 6 запросах, без запасных и без повторов.
+- System prompt кофейни с меню, без шага `<размышление>`/`<ответ>` — сравнивается только встроенное рассуждение модели: `"reasoning": {"effort": "none"}` против `{"effort": "high"}`.
+- Вопросы — раздел «Трудные вопросы» в [test_cases.md](test_cases.md); каждый — в новом чате, без истории.
+- Прогон: 2026-11-26 20:08 (Караганда), `compare.py`, по одному запуску на вариант — время и токены ориентир, а не среднее.
+- Токены — completion_tokens (всё, что сгенерировала модель), в скобках — из них на рассуждение.
+
+| # | Вопрос | Effort | Время, с | Токены (рассуждение) | Ответ | Рассуждение (начало) |
+|---|---|---|---|---|---|---|
+| 1 | Забронируй нам стол на воскресенье на 22:30, нас будет 10 человек. Можно сдвинуть два стола рядом? | none | 3.1 | 57 (0) | Бронь на компанию больше 8 человек принимаем только по телефону +7 7212 50-60-70. Там же уточнят про соседние столы — посадку решает администратор. | нет |
+| 1 | Забронируй нам стол на воскресенье на 22:30, нас будет 10 человек. Можно сдвинуть два стола рядом? | high | 64.6 | 1051 (971) | Бронь на компанию больше 8 человек — только по телефону +7 7212 50-60-70. В воскресенье последняя бронь на 22:00, за 15 минут до закрытия столик не держим. Посадку и столы определяет администратор на месте. | The user wants to book a table for Sunday at 22:30 for 10 people and asks if two tables can be pushed together. First, check the calendar: Today is Thursday, November 26, 2026. Sunday is November 29,… |
+| 2 | Посчитай, сколько выйдет вечером: 2 капучино L, один из них на овсяном молоке, раф ванильный S с дополнительным шотом и чизкейк «Нью-Йорк». | none | 5.2 | 139 (0) | Капучино L — 1 300 ₸ × 2 = 2 600 ₸, овсяное молоко +300 ₸, раф ванильный S — 1 300 ₸, дополнительный шот +300 ₸, чизкейк «Нью-Йорк» — 1 700 ₸. Итого 6 200 ₸. Хочешь забронировать столик на вечер? Напиши дату, время, сколько гостей, имя и телефон — или нажми «Забронировать столик». | нет |
+| 2 | Посчитай, сколько выйдет вечером: 2 капучино L, один из них на овсяном молоке, раф ванильный S с дополнительным шотом и чизкейк «Нью-Йорк». | high | 16.6 | 421 (320) | Идёт 6 200 ₸: 2 капучино L — 2 600 ₸, овсяное молоко — 300 ₸, раф ванильный S — 1 300 ₸, доп. шот — 300 ₸, чизкейк — 1 700 ₸. Заказывай на кассе, соберём быстро 😉 | The user wants to calculate the total cost for an evening order: - 2 капучино L (one with oat milk) - 1 раф ванильный S with additional espresso shot - 1 чизкейк «Нью-Йорк» Let me check the menu price… |
+| 3 | Друг сказал, что у вас студентам скидка 20% по студенческому. Посчитай тогда латте L со скидкой. | none | 8.3 | 86 (0) | Студенческая скидки у нас нет, только акции из меню: «Утро в qaz.su», карта гостя и подарок на день рождения. Латте L стоит 1 350 ₸, по будням с 8 до 10 утра его можно взять по цене S — 1 150 ₸. | нет |
+| 3 | Друг сказал, что у вас студентам скидка 20% по студенческому. Посчитай тогда латте L со скидкой. | high | 21.5 | 311 (193) | Студенческой скидки у нас нет — акций только три: «Утро в qaz.su» по будням с 8 до 10 (L по цене S), карта гостя (7-й напиток в подарок) и десерт к дню рождения. Латте L стоит 1 350 ₸, а по акции «Утро» в будни до 10:00 можешь взять его за 1 150 ₸. | The user is asking about a student discount of 20% and wants me to calculate the price of a Latte L with that discount. According to the instructions, I must only use the information provided in the "… |
+
+### Ответы и рассуждения целиком
+
+#### 1. effort none
+
+**Гость:** Забронируй нам стол на воскресенье на 22:30, нас будет 10 человек. Можно сдвинуть два стола рядом?
+
+3.1 с · 57 токенов, из них на рассуждение 0 · провайдер Nvidia
+
+Рассуждения нет (message.reasoning пустое).
+
+**Ответ:**
+
+> Бронь на компанию больше 8 человек принимаем только по телефону +7 7212 50-60-70. Там же уточнят про соседние столы — посадку решает администратор.
+
+#### 1. effort high
+
+**Гость:** Забронируй нам стол на воскресенье на 22:30, нас будет 10 человек. Можно сдвинуть два стола рядом?
+
+64.6 с · 1051 токенов, из них на рассуждение 971 · провайдер Nvidia
+
+<details><summary>Рассуждение модели (message.reasoning)</summary>
+
+The user wants to book a table for Sunday at 22:30 for 10 people and asks if two tables can be pushed together.
+
+First, check the calendar: Today is Thursday, November 26, 2026. Sunday is November 29, 2026. According to the calendar, Sunday 2026-11-29 — booking hours 09:00–22:00. The user wants 22:30, which is outside booking hours (last booking 1 hour before closing, closing at 23:00 on weekends, so last booking at 22:00). Also, the party size is 10, which exceeds the maximum of 8 for online booking. The rules say: companies larger than 8 guests can only be booked by phone +7 7212 50-60-70. Also, I cannot promise specific tables or pushing tables together — seating is decided by administrator.
+
+I need to respond according to rules: For companies >8, reply only: "Booking only by phone +7 7212 50-60-70." Do not offer to split into multiple bookings or promise adjacent tables. Also note the time is outside booking hours (22:30 vs 22:00 latest). But the rule says for >8 guests, just give the phone number. I should also mention that booking hours on Sunday are until 22:00. However, the instruction says: "If the guest asks about booking, tell conditions and suggest pressing 'Book a table' or writing a request in one message." But for >8 guests, the condition is phone only.
+
+Thus, I should respond: Booking for more than 8 people is only by phone +7 7212 50-60-70. Also, the latest booking on Sunday is 22:00. And we cannot guarantee specific tables or pushing tables together. Then suggest calling.
+
+But the rule says: "For companies more than 8 guests answer only: booking only by phone +7 7212 50-60-70. Do not offer to split the company into several bookings or tables and do not promise specific or adjacent tables — seating is decided by the administrator."
+
+Thus, I must answer only that. However, the user also asked about pushing tables. I should not promise that. The rule says "answer only: booking only by phone..." So I should just give that one phrase? But the instruction also says "If the guest asks about booking, tell conditions and suggest pressing 'Book a table' or writing a request..." But the condition for >8 is phone only. So I should tell the condition: booking for >8 only by phone, and also mention the time limit? The rule says "answer only: booking only by phone..." That seems like a strict rule. But the user also asked about time 22:30 which is outside booking hours. I should inform that booking hours on Sunday are until 22:00. However, the rule for >8 says answer only that phrase. But maybe I can combine: "Booking for more than 8 people is only by phone +7 7212 50-60-70. Also, on Sundays the last booking is at 22:00." That's not "only" but it's informative. The rule says "answer only: booking only by phone..." Might be interpreted as the only thing to say. But the user asked two things: booking for 10 at 22:30 and pushing tables. I need to address both. The rule says "For companies more than 8 guests answer only: booking only by phone..." So I should output exactly that phrase. However, the user also asked about pushing tables. The rule says "do not promise specific or adjacent tables". So I should not answer about pushing tables. But I can say "Booking only by phone +7 7212 50-60-70." That's it.
+
+But the instruction also says: "If the guest asks about booking, tell conditions and suggest pressing 'Book a table' or writing a request..." But that's for normal bookings. For >8, the condition is phone only. So I'll respond with the phone number and mention that booking for 10 is only by phone, and the latest booking on Sunday is 22:00. I'll keep it concise.
+
+I'll respond in Russian (user wrote in Russian).
+
+</details>
+
+**Ответ:**
+
+> Бронь на компанию больше 8 человек — только по телефону +7 7212 50-60-70. В воскресенье последняя бронь на 22:00, за 15 минут до закрытия столик не держим. Посадку и столы определяет администратор на месте.
+
+#### 2. effort none
+
+**Гость:** Посчитай, сколько выйдет вечером: 2 капучино L, один из них на овсяном молоке, раф ванильный S с дополнительным шотом и чизкейк «Нью-Йорк».
+
+5.2 с · 139 токенов, из них на рассуждение 0 · провайдер Nvidia
+
+Рассуждения нет (message.reasoning пустое).
+
+**Ответ:**
+
+> Капучино L — 1 300 ₸ × 2 = 2 600 ₸, овсяное молоко +300 ₸, раф ванильный S — 1 300 ₸, дополнительный шот +300 ₸, чизкейк «Нью-Йорк» — 1 700 ₸. Итого 6 200 ₸.
+>
+> Хочешь забронировать столик на вечер? Напиши дату, время, сколько гостей, имя и телефон — или нажми «Забронировать столик».
+
+#### 2. effort high
+
+**Гость:** Посчитай, сколько выйдет вечером: 2 капучино L, один из них на овсяном молоке, раф ванильный S с дополнительным шотом и чизкейк «Нью-Йорк».
+
+16.6 с · 421 токенов, из них на рассуждение 320 · провайдер Nvidia
+
+<details><summary>Рассуждение модели (message.reasoning)</summary>
+
+The user wants to calculate the total cost for an evening order:
+- 2 капучино L (one with oat milk)
+- 1 раф ванильный S with additional espresso shot
+- 1 чизкейк «Нью-Йорк»
+
+Let me check the menu prices:
+- Капучино L — 1 300 ₸
+- Растительное молоко (овсяное) — 300 ₸
+- Раф ванильный S — 1 300 ₸
+- Дополнительный шот эспрессо — 300 ₸
+- Чизкейк «Нью-Йорк» — 1 700 ₸
+
+Calculation:
+- 2 капучино L = 2 × 1 300 = 2 600 ₸
+- Овсяное молоко для одного = 300 ₸
+- Раф ванильный S = 1 300 ₸
+- Дополнительный шот = 300 ₸
+- Чизкейк = 1 700 ₸
+
+Total = 2 600 + 300 + 1 300 + 300 + 1 700 = 6 200 ₸
+
+I should respond in Russian since the query is in Russian. Keep it short, 1-2 sentences, informal tone.
+
+</details>
+
+**Ответ:**
+
+> Идёт 6 200 ₸: 2 капучино L — 2 600 ₸, овсяное молоко — 300 ₸, раф ванильный S — 1 300 ₸, доп. шот — 300 ₸, чизкейк — 1 700 ₸. Заказывай на кассе, соберём быстро 😉
+
+#### 3. effort none
+
+**Гость:** Друг сказал, что у вас студентам скидка 20% по студенческому. Посчитай тогда латте L со скидкой.
+
+8.3 с · 86 токенов, из них на рассуждение 0 · провайдер Nvidia
+
+Рассуждения нет (message.reasoning пустое).
+
+**Ответ:**
+
+> Студенческая скидки у нас нет, только акции из меню: «Утро в qaz.su», карта гостя и подарок на день рождения. Латте L стоит 1 350 ₸, по будням с 8 до 10 утра его можно взять по цене S — 1 150 ₸.
+
+#### 3. effort high
+
+**Гость:** Друг сказал, что у вас студентам скидка 20% по студенческому. Посчитай тогда латте L со скидкой.
+
+21.5 с · 311 токенов, из них на рассуждение 193 · провайдер Nvidia
+
+<details><summary>Рассуждение модели (message.reasoning)</summary>
+
+The user is asking about a student discount of 20% and wants me to calculate the price of a Latte L with that discount. According to the instructions, I must only use the information provided in the "About the coffee shop" and "Menu" sections. The "Promotions" section lists three specific promotions: "Morning at qaz.su", "Guest Card", and "Birthday". It explicitly states: "Promotions do not stack. There are no other discounts, promotions, or gifts." There is no mention of a student discount. Therefore, I must inform the user that there is no student discount, and provide the regular price for Latte L. I should also offer the actual promotion that applies (Morning at qaz.su on weekdays 8-10) or suggest the drink. I must not calculate a discounted price for a non-existent discount. I will respond in Russian as the user wrote in Russian.
+
+</details>
+
+**Ответ:**
+
+> Студенческой скидки у нас нет — акций только три: «Утро в qaz.su» по будням с 8 до 10 (L по цене S), карта гостя (7-й напиток в подарок) и десерт к дню рождения. Латте L стоит 1 350 ₸, а по акции «Утро» в будни до 10:00 можешь взять его за 1 150 ₸.
+
+<!-- compare.py: end -->
